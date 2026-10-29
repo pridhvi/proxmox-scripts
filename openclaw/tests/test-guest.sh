@@ -37,6 +37,7 @@ output=$(OPENCLAW_DRY_RUN=1 OPENCLAW_TOKEN_FILE="$TMP/token" "$GUEST_INSTALLER")
 mkdir -p "$TMP/bin"
 cat >"$TMP/bin/openclaw" <<'STUB'
 #!/usr/bin/env bash
+echo "cwd $PWD" >>"$TEST_LOG"
 echo "openclaw $*" >>"$TEST_LOG"
 if [[ ${TEST_FAIL_UPDATE:-0} == 1 && ${1:-} == update ]]; then
   exit 42
@@ -46,17 +47,39 @@ cat >"$TMP/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 echo "curl $*" >>"$TEST_LOG"
 STUB
-chmod +x "$TMP/bin/openclaw" "$TMP/bin/curl"
+cat >"$TMP/bin/id" <<'STUB'
+#!/usr/bin/env bash
+echo 1000
+STUB
+cat >"$TMP/bin/runuser" <<'STUB'
+#!/usr/bin/env bash
+while [[ $# -gt 0 && $1 != -- ]]; do
+  shift
+done
+shift
+exec "$@"
+STUB
+chmod +x "$TMP/bin/openclaw" "$TMP/bin/curl" "$TMP/bin/id" "$TMP/bin/runuser"
+
+mkdir -p "$TMP/openclaw-home"
+mkdir -p "$TMP/npm/bin"
+ln -s "$TMP/bin/openclaw" "$TMP/npm/bin/openclaw"
+guest_helper=$(awk '/^as_openclaw\(\) \{$/{copy=1} copy{print} copy && /^}$/{exit}' "$GUEST_INSTALLER")
+eval "$guest_helper"
+: >"$TMP/guest.log"
+PATH="$TMP/bin:$PATH" TEST_LOG="$TMP/guest.log" OPENCLAW_USER=openclaw OPENCLAW_HOME="$TMP/openclaw-home" NPM_PREFIX="$TMP/npm" as_openclaw openclaw install-probe
+grep -Fxq "cwd $TMP/openclaw-home" "$TMP/guest.log" || fail "installer did not run OpenClaw from its home"
 
 : >"$TMP/update.log"
-PATH="$TMP/bin:$PATH" TEST_LOG="$TMP/update.log" OPENCLAW_TESTING=1 "$UPDATER"
+PATH="$TMP/bin:$PATH" TEST_LOG="$TMP/update.log" OPENCLAW_HOME="$TMP/openclaw-home" OPENCLAW_TESTING=1 "$UPDATER"
+grep -Fxq "cwd $TMP/openclaw-home" "$TMP/update.log" || fail "updater did not run OpenClaw from its home"
 grep -Fxq "openclaw update" "$TMP/update.log" || fail "updater did not call openclaw update"
 grep -Fxq "openclaw doctor --fix" "$TMP/update.log" || fail "updater did not run Doctor"
 grep -Fxq "openclaw gateway status --deep" "$TMP/update.log" || fail "updater did not check gateway"
 grep -Fxq "openclaw browser --json status" "$TMP/update.log" || fail "updater did not check browser"
 
 : >"$TMP/update.log"
-if PATH="$TMP/bin:$PATH" TEST_LOG="$TMP/update.log" TEST_FAIL_UPDATE=1 OPENCLAW_TESTING=1 "$UPDATER" >/dev/null 2>&1; then
+if PATH="$TMP/bin:$PATH" TEST_LOG="$TMP/update.log" OPENCLAW_HOME="$TMP/openclaw-home" TEST_FAIL_UPDATE=1 OPENCLAW_TESTING=1 "$UPDATER" >/dev/null 2>&1; then
   fail "update failure was swallowed"
 fi
 if grep -q "doctor" "$TMP/update.log"; then

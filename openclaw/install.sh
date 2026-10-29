@@ -310,15 +310,18 @@ install -d -m 0755 -o "$OPENCLAW_USER" -g "$OPENCLAW_USER" "$NPM_PREFIX"
 as_openclaw() {
   local uid
   uid=$(id -u "$OPENCLAW_USER")
-  runuser -u "$OPENCLAW_USER" -- env \
-    HOME="$OPENCLAW_HOME" \
-    USER="$OPENCLAW_USER" \
-    LOGNAME="$OPENCLAW_USER" \
-    NPM_CONFIG_PREFIX="$NPM_PREFIX" \
-    PATH="$NPM_PREFIX/bin:/usr/local/bin:/usr/bin:/bin" \
-    XDG_RUNTIME_DIR="/run/user/$uid" \
-    DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
-    "$@"
+  (
+    cd "$OPENCLAW_HOME"
+    runuser -u "$OPENCLAW_USER" -- env \
+      HOME="$OPENCLAW_HOME" \
+      USER="$OPENCLAW_USER" \
+      LOGNAME="$OPENCLAW_USER" \
+      NPM_CONFIG_PREFIX="$NPM_PREFIX" \
+      PATH="$NPM_PREFIX/bin:/usr/local/bin:/usr/bin:/bin" \
+      XDG_RUNTIME_DIR="/run/user/$uid" \
+      DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+      "$@"
+  )
 }
 
 as_openclaw npm install -g openclaw@latest --allow-scripts=openclaw
@@ -400,22 +403,24 @@ PORT=${OPENCLAW_GATEWAY_PORT:-18789}
 }
 
 as_openclaw() {
-  if [[ ${OPENCLAW_TESTING:-0} == 1 ]]; then
-    "$@"
-    return
-  fi
-
   local uid
-  uid=$(id -u "$OPENCLAW_USER")
-  runuser -u "$OPENCLAW_USER" -- env \
-    HOME="$OPENCLAW_HOME" \
-    USER="$OPENCLAW_USER" \
-    LOGNAME="$OPENCLAW_USER" \
-    NPM_CONFIG_PREFIX="$NPM_PREFIX" \
-    PATH="$NPM_PREFIX/bin:/usr/local/bin:/usr/bin:/bin" \
-    XDG_RUNTIME_DIR="/run/user/$uid" \
-    DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
-    "$@"
+  (
+    cd "$OPENCLAW_HOME"
+    if [[ ${OPENCLAW_TESTING:-0} == 1 ]]; then
+      "$@"
+    else
+      uid=$(id -u "$OPENCLAW_USER")
+      runuser -u "$OPENCLAW_USER" -- env \
+        HOME="$OPENCLAW_HOME" \
+        USER="$OPENCLAW_USER" \
+        LOGNAME="$OPENCLAW_USER" \
+        NPM_CONFIG_PREFIX="$NPM_PREFIX" \
+        PATH="$NPM_PREFIX/bin:/usr/local/bin:/usr/bin:/bin" \
+        XDG_RUNTIME_DIR="/run/user/$uid" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+        "$@"
+    fi
+  )
 }
 
 as_openclaw "$OPENCLAW_BIN" update
