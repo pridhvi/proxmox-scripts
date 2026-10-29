@@ -3,30 +3,40 @@
 Run this on a Proxmox VE host.
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/pridhvi/proxmox-scripts/main/openclaw/install.sh)"
+bash -c "$(curl -fsSL https://github.com/pridhvi/proxmox-scripts/raw/refs/heads/main/openclaw/install.sh)"
 ```
 
-The self-contained script creates an unprivileged Debian 13 AMD64 LXC and installs OpenClaw natively.
+The self-contained script creates an unprivileged Debian 13 AMD64 LXC and installs OpenClaw natively. It enables `nesting=1` for Debian 13 systemd user services. It does not enable `keyctl`.
 
 Defaults:
 
 - 8 CPU cores, 16 GiB RAM, 1 GiB swap, 32 GiB disk
 - CIDR `/24`, gateway `10.10.10.1`, bridge `vmbr0`
-- Storage `local-lvm`, template storage `local`
+- Storage `local-zfs`, template storage `local`
 - Gateway port `18789`
 
-The installer requires a static IPv4 address and prompts for it. To inspect its actions without changing Proxmox:
+The installer prompts for a static IPv4 address. The DNS prompt accepts one or two comma-separated IPv4 addresses. Leave it blank to inherit the Proxmox host's DNS settings.
+
+Normal output shows one colored status line per section. Use `-v` to show the full command output:
 
 ```bash
-OPENCLAW_IP=10.0.0.67 bash -c "$(curl -fsSL https://raw.githubusercontent.com/pridhvi/proxmox-scripts/main/openclaw/install.sh)" -- --dry-run --non-interactive
+bash -c "$(curl -fsSL https://github.com/pridhvi/proxmox-scripts/raw/refs/heads/main/openclaw/install.sh)" -- -v
+```
+
+The full output is also saved to `/var/log/openclaw-lxc-install-<CTID>.log`.
+
+To inspect the commands without changing Proxmox:
+
+```bash
+OPENCLAW_IP=10.10.10.204 OPENCLAW_NAMESERVERS=10.10.10.2,10.10.10.3 bash -c "$(curl -fsSL https://github.com/pridhvi/proxmox-scripts/raw/refs/heads/main/openclaw/install.sh)" -- --dry-run --non-interactive
 ```
 
 Non-interactive runs require `OPENCLAW_IP`. Other values can be overridden with environment variables such as `OPENCLAW_CTID`, `OPENCLAW_GATEWAY`, `OPENCLAW_STORAGE`, and `OPENCLAW_TEMPLATE_STORAGE`.
 
-After installation, finish OpenClaw setup as 'openclaw' user:
+After installation, run onboarding as the `openclaw` user:
 
 ```bash
-openclaw onboard
+runuser -u openclaw -- env HOME=/home/openclaw openclaw onboard
 ```
 
 Useful commands inside the container:
