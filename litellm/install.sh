@@ -382,6 +382,227 @@ wait_for_guest() {
   return 1
 }
 
+prepare_payloads() {
+  [[ -z $WORK_DIR ]] || return 0
+  WORK_DIR=$(mktemp -d)
+
+  cat >"$WORK_DIR/compose.yml" <<'LITELLM_COMPOSE'
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:${LITELLM_VERSION}
+    restart: unless-stopped
+    ports:
+      - "${LITELLM_PORT:-4000}:4000"
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?set in .env}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:?set in .env}
+      DATABASE_URL: postgresql://litellm:${POSTGRES_PASSWORD:?set in .env}@db:5432/litellm
+      STORE_MODEL_IN_DB: "True"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      POSTGRES_DB: litellm
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
+LITELLM_COMPOSE
+
+  cat >"$WORK_DIR/update.sh" <<'LITELLM_UPDATER'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+LITELLM_DIR=${LITELLM_DIR:-/opt/litellm}
+ENV_FILE="$LITELLM_DIR/.env"
+COMPOSE_FILE="$LITELLM_DIR/compose.yml"
+TEMP_ENV=""
+
+cleanup() {
+  [[ -z $TEMP_ENV ]] || rm -f -- "$TEMP_ENV"
+}
+trap cleanup EXIT
+
+die() {
+  echo "Error: $*" >&2
+  exit 1
+}
+
+resolve_latest_litellm_version() {
+  local response version
+  response=$(curl -fsSL \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'User-Agent: proxmox-scripts-litellm' \
+    https://api.github.com/repos/BerriAI/litellm/releases/latest)
+  version=$(printf '%s' "$response" | jq -er '.tag_name | select(type == "string")')
+  [[ $version =~ ^v[0-9]+[.][0-9]+[.][0-9]+$ ]] || die "GitHub returned an invalid LiteLLM release tag"
+  printf '%s\n' "$version"
+}
+
+read_single_value() {
+  local key=$1
+  awk -F= -v key="$key" '
+    $1 == key { count++; sub(/^[^=]*=/, ""); value=$0 }
+    END { if (count != 1) exit 1; print value }
+  ' "$ENV_FILE"
+}
+
+wait_for_litellm() {
+  local port=$1 attempt
+  for attempt in {1..90}; do
+    if curl -fsS --max-time 5 "http://127.0.0.1:${port}/health/readiness" >/dev/null; then
+      return 0
+    fi
+    sleep 5
+  done
+  die "LiteLLM did not become ready"
+}
+
+[[ $EUID -eq 0 ]] || die "run as root"
+[[ -f $ENV_FILE ]] || die "credentials file not found: $ENV_FILE"
+[[ -f $COMPOSE_FILE ]] || die "Compose file not found: $COMPOSE_FILE"
+
+next_version=$(resolve_latest_litellm_version)
+port=$(read_single_value LITELLM_PORT) || die "LITELLM_PORT is missing or duplicated in .env"
+[[ $port =~ ^[0-9]+$ ]] && ((port >= 1 && port <= 65535)) || die "invalid LITELLM_PORT in .env"
+read_single_value LITELLM_VERSION >/dev/null || die "LITELLM_VERSION is missing or duplicated in .env"
+
+TEMP_ENV=$(mktemp "$LITELLM_DIR/.env.XXXXXX")
+awk -v version="$next_version" '
+  /^LITELLM_VERSION=/ { print "LITELLM_VERSION=" version; next }
+  { print }
+' "$ENV_FILE" >"$TEMP_ENV"
+chmod 0600 "$TEMP_ENV"
+mv -f "$TEMP_ENV" "$ENV_FILE"
+TEMP_ENV=""
+
+printf 'Updating LiteLLM to %s\n' "$next_version"
+cd "$LITELLM_DIR"
+docker compose --env-file .env -f compose.yml pull
+docker compose --env-file .env -f compose.yml up -d
+wait_for_litellm "$port"
+printf 'LiteLLM is ready.\n'
+LITELLM_UPDATER
+
+  cat >"$WORK_DIR/install-internal.sh" <<'LITELLM_GUEST_INSTALLER'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+PORT=${LITELLM_PORT:-4000}
+
+die() {
+  echo "Error: $*" >&2
+  exit 1
+}
+
+resolve_latest_litellm_version() {
+  local response version
+  response=$(curl -fsSL \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'User-Agent: proxmox-scripts-litellm' \
+    https://api.github.com/repos/BerriAI/litellm/releases/latest)
+  version=$(printf '%s' "$response" | jq -er '.tag_name | select(type == "string")')
+  [[ $version =~ ^v[0-9]+[.][0-9]+[.][0-9]+$ ]] || die "GitHub returned an invalid LiteLLM release tag"
+  printf '%s\n' "$version"
+}
+
+wait_for_litellm() {
+  local attempt
+  for attempt in {1..90}; do
+    if curl -fsS --max-time 5 "http://127.0.0.1:${PORT}/health/readiness" >/dev/null; then
+      return 0
+    fi
+    sleep 5
+  done
+  die "LiteLLM did not become ready"
+}
+
+generate_hex_secret() {
+  local secret
+  secret=$(openssl rand -hex 32) || die "could not generate a secure random value"
+  [[ $secret =~ ^[0-9a-f]{64}$ ]] || die "generated random value has an invalid format"
+  printf '%s\n' "$secret"
+}
+
+[[ $EUID -eq 0 ]] || die "run inside the LXC as root"
+[[ $PORT =~ ^[0-9]+$ ]] && ((PORT >= 1 && PORT <= 65535)) || die "invalid LiteLLM port"
+
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl jq openssl docker.io docker-compose
+systemctl enable --now docker
+
+install -d -m 0755 /opt/litellm
+install -m 0644 /tmp/litellm-compose.yml /opt/litellm/compose.yml
+install -m 0755 /tmp/litellm-update /usr/local/sbin/litellm-update
+ln -sfn /usr/local/sbin/litellm-update /usr/bin/update
+
+version=$(resolve_latest_litellm_version)
+master_key=$(generate_hex_secret)
+salt_key=$(generate_hex_secret)
+postgres_password=$(generate_hex_secret)
+umask 077
+env_file=$(mktemp /opt/litellm/.env.XXXXXX)
+{
+  printf 'LITELLM_VERSION=%s\n' "$version"
+  printf 'LITELLM_PORT=%s\n' "$PORT"
+  printf 'LITELLM_MASTER_KEY=sk-%s\n' "$master_key"
+  printf 'LITELLM_SALT_KEY=sk-%s\n' "$salt_key"
+  printf 'POSTGRES_PASSWORD=%s\n' "$postgres_password"
+} >"$env_file"
+mv "$env_file" /opt/litellm/.env
+chmod 0600 /opt/litellm/.env
+unset master_key salt_key postgres_password
+
+cd /opt/litellm
+docker compose --env-file .env -f compose.yml pull
+docker compose --env-file .env -f compose.yml up -d
+wait_for_litellm
+
+rm -rf /var/lib/apt/lists/*
+LITELLM_GUEST_INSTALLER
+
+  chmod 0755 "$WORK_DIR/install-internal.sh" "$WORK_DIR/update.sh"
+}
+
+install_gateway() {
+  prepare_payloads
+  mutate pct push "$CTID" "$WORK_DIR/compose.yml" /tmp/litellm-compose.yml --perms 0644 || return $?
+  mutate pct push "$CTID" "$WORK_DIR/update.sh" /tmp/litellm-update --perms 0755 || return $?
+  mutate pct push "$CTID" "$WORK_DIR/install-internal.sh" /root/install-litellm.sh --perms 0755 || return $?
+  mutate pct exec "$CTID" -- env "LITELLM_PORT=$PORT" /root/install-litellm.sh
+}
+
+verify_gateway() {
+  [[ $DRY_RUN -eq 1 ]] && return 0
+  pct exec "$CTID" -- curl -fsS --max-time 5 "http://127.0.0.1:${PORT}/health/readiness" >/dev/null
+}
+
+print_summary() {
+  if [[ $DRY_RUN -eq 1 ]]; then
+    printf '\nDry run complete. No changes were made.\n'
+    return 0
+  fi
+  printf '\n%bLiteLLM is ready%b\n' "$GREEN" "$RESET"
+  printf 'UI: http://%s:%s/ui/\n' "$IP_ADDRESS" "$PORT"
+  printf 'Username: admin\n'
+  printf 'Credentials: /opt/litellm/.env\n'
+  printf "Password: pct exec %q -- sed -n 's/^LITELLM_MASTER_KEY=//p' /opt/litellm/.env\n" "$CTID"
+  printf 'Update: pct exec %s -- update\n' "$CTID"
+}
+
 main() {
   parse_args "$@"
   collect_settings
@@ -393,6 +614,9 @@ main() {
   run_step "Creating container $CTID" create_container || return $?
   run_step "Starting container $CTID" start_container || return $?
   run_step "Waiting for container" wait_for_guest || return $?
+  run_step "Installing LiteLLM gateway" install_gateway || return $?
+  run_step "Verifying LiteLLM gateway" verify_gateway || return $?
+  print_summary
 }
 
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then

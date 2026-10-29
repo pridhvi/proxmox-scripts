@@ -99,6 +99,10 @@ output=$(run_installer)
 [[ $output == *"--unprivileged 1"* ]] || fail "container must be unprivileged"
 [[ $output == *"--features nesting=1\,keyctl=1"* ]] || fail "Docker LXC features are missing"
 [[ $output == *"--nameserver 10.10.10.2\\ 10.10.10.3"* ]] || fail "two DNS servers were not normalized for Proxmox"
+[[ $output == *"pct push 205"*"litellm-compose.yml"* ]] || fail "Compose payload was not pushed"
+[[ $output == *"pct exec 205 -- env LITELLM_PORT=4000 /root/install-litellm.sh"* ]] || \
+  fail "guest installer was not invoked with the configured port"
+[[ $output != *"LITELLM_MASTER_KEY="* ]] || fail "dry-run output exposed a generated master key"
 [[ ! -s $TMP/mutations ]] || fail "dry-run executed a mutating command"
 
 setup_stubs
