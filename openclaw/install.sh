@@ -260,8 +260,10 @@ install Google Chrome
 openclaw config set gateway.mode local
 openclaw config set gateway.bind lan
 openclaw config set gateway.auth.mode token
+openclaw config set browser.noSandbox true
 loginctl enable-linger openclaw
 openclaw gateway install
+openclaw gateway start
 verify headless browser
 install /usr/bin/update
 EOF
@@ -368,13 +370,15 @@ as_openclaw "$OPENCLAW_BIN" config validate
 loginctl enable-linger "$OPENCLAW_USER"
 uid=$(id -u "$OPENCLAW_USER")
 systemctl start "user@$uid.service"
-as_openclaw "$OPENCLAW_BIN" gateway install --port "$PORT"
 
-if ! as_openclaw "$OPENCLAW_BIN" browser start --headless; then
-  echo "Chrome sandboxing failed in the LXC; using the LXC as the browser isolation boundary." >&2
+start_openclaw() {
   as_openclaw "$OPENCLAW_BIN" config set browser.noSandbox true --strict-json
+  as_openclaw "$OPENCLAW_BIN" gateway install --port "$PORT"
+  as_openclaw "$OPENCLAW_BIN" gateway start
   as_openclaw "$OPENCLAW_BIN" browser start --headless
-fi
+}
+
+start_openclaw
 
 install -m 0755 /root/update-openclaw.sh /usr/local/sbin/openclaw-update
 ln -sfn /usr/local/sbin/openclaw-update /usr/bin/update

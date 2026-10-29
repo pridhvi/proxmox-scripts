@@ -70,6 +70,39 @@ eval "$guest_helper"
 PATH="$TMP/bin:$PATH" TEST_LOG="$TMP/guest.log" OPENCLAW_USER=openclaw OPENCLAW_HOME="$TMP/openclaw-home" NPM_PREFIX="$TMP/npm" as_openclaw openclaw install-probe
 grep -Fxq "cwd $TMP/openclaw-home" "$TMP/guest.log" || fail "installer did not run OpenClaw from its home"
 
+cat >"$TMP/bin/openclaw-lifecycle" <<'STUB'
+#!/usr/bin/env bash
+case "$*" in
+  "config set browser.noSandbox true --strict-json")
+    touch "$TEST_STATE_DIR/no-sandbox"
+    ;;
+  "gateway install --port 18789")
+    touch "$TEST_STATE_DIR/installed"
+    ;;
+  "gateway start")
+    [[ -e $TEST_STATE_DIR/installed ]] || exit 1
+    touch "$TEST_STATE_DIR/ready"
+    ;;
+  "browser start --headless")
+    [[ -e $TEST_STATE_DIR/no-sandbox && -e $TEST_STATE_DIR/ready ]] || exit 1
+    touch "$TEST_STATE_DIR/browser"
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+STUB
+chmod +x "$TMP/bin/openclaw-lifecycle"
+lifecycle_helper=$(awk '/^start_openclaw\(\) \{$/{copy=1} copy{print} copy && /^}$/{exit}' "$GUEST_INSTALLER")
+[[ -n $lifecycle_helper ]] || fail "installer has no gateway readiness sequence"
+eval "$lifecycle_helper"
+as_openclaw() {
+  "$@"
+}
+mkdir -p "$TMP/lifecycle-state"
+TEST_STATE_DIR="$TMP/lifecycle-state" OPENCLAW_BIN="$TMP/bin/openclaw-lifecycle" PORT=18789 start_openclaw
+[[ -e $TMP/lifecycle-state/browser ]] || fail "installer did not start the browser after gateway readiness"
+
 : >"$TMP/update.log"
 PATH="$TMP/bin:$PATH" TEST_LOG="$TMP/update.log" OPENCLAW_HOME="$TMP/openclaw-home" OPENCLAW_TESTING=1 "$UPDATER"
 grep -Fxq "cwd $TMP/openclaw-home" "$TMP/update.log" || fail "updater did not run OpenClaw from its home"
