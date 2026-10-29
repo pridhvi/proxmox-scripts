@@ -7,6 +7,15 @@ ALLOW_USED_IP=0
 VERBOSE=0
 CT_CREATED=0
 WORK_DIR=""
+SPINNER_PID=""
+LOG_FILE=${LITELLM_LOG_FILE:-}
+USE_TTY=0
+USE_COLOR=0
+CYAN=""
+GREEN=""
+AMBER=""
+RED=""
+RESET=""
 
 usage() {
   echo "Usage: $0 [-v|--verbose] [--dry-run] [--non-interactive] [--allow-used-ip]"
@@ -18,6 +27,7 @@ die() {
 }
 
 cleanup() {
+  stop_spinner
   [[ -z $WORK_DIR ]] || rm -rf -- "$WORK_DIR"
 }
 
@@ -27,7 +37,112 @@ on_error() {
     echo "Installation stopped. Container ${CTID:-unknown} was kept for inspection." >&2
     echo "Open its console with: pct enter ${CTID:-unknown}" >&2
   fi
+  [[ -z ${LOG_FILE:-} || $LOG_FILE == /dev/null ]] || echo "Detailed log: $LOG_FILE" >&2
   exit "$code"
+}
+
+setup_output() {
+  if [[ -n ${LITELLM_FORCE_TTY+x} ]]; then
+    USE_TTY=$LITELLM_FORCE_TTY
+  elif [[ -t 1 ]]; then
+    USE_TTY=1
+  else
+    USE_TTY=0
+  fi
+
+  USE_COLOR=0
+  CYAN=""
+  GREEN=""
+  AMBER=""
+  RED=""
+  RESET=""
+  if [[ $USE_TTY -eq 1 && ! -v NO_COLOR ]]; then
+    USE_COLOR=1
+    CYAN=$'\033[36m'
+    GREEN=$'\033[32m'
+    AMBER=$'\033[33m'
+    RED=$'\033[31m'
+    RESET=$'\033[0m'
+  fi
+
+  if [[ -z $LOG_FILE ]]; then
+    if [[ $DRY_RUN -eq 1 ]]; then
+      LOG_FILE=/dev/null
+    else
+      LOG_FILE="/var/log/litellm-lxc-install-${CTID:-unknown}.log"
+    fi
+  fi
+  if [[ $LOG_FILE != /dev/null ]]; then
+    mkdir -p "$(dirname "$LOG_FILE")"
+  fi
+  : >"$LOG_FILE"
+}
+
+start_spinner() {
+  local label=$1
+  if [[ $USE_TTY -ne 1 || ${LITELLM_TESTING:-0} == 1 ]]; then
+    return 0
+  fi
+  printf '\033[?25l'
+  (
+    trap 'exit 0' TERM
+    local -a frames=('◐' '◓' '◑' '◒')
+    local index=0
+    while true; do
+      printf '\r\033[K  %b%s%b %s' "$AMBER" "${frames[$index]}" "$RESET" "$label"
+      index=$(((index + 1) % ${#frames[@]}))
+      sleep 0.1
+    done
+  ) &
+  SPINNER_PID=$!
+}
+
+stop_spinner() {
+  if [[ -n ${SPINNER_PID:-} ]]; then
+    kill "$SPINNER_PID" >/dev/null 2>&1 || true
+    wait "$SPINNER_PID" 2>/dev/null || true
+    SPINNER_PID=""
+  fi
+  if [[ ${USE_TTY:-0} -eq 1 && ${LITELLM_TESTING:-0} != 1 ]]; then
+    printf '\r\033[K\033[?25h'
+  fi
+}
+
+print_success() {
+  printf '  %b✓%b %s\n' "$GREEN" "$RESET" "$1"
+}
+
+print_error() {
+  printf '  %b✗%b %s\n' "$RED" "$RESET" "$1" >&2
+}
+
+run_step() {
+  local label=$1
+  shift
+  local status
+  printf '\n[%s]\n' "$label" >>"$LOG_FILE"
+
+  if [[ $VERBOSE -eq 1 || $DRY_RUN -eq 1 ]]; then
+    printf '  %b›%b %s\n' "$CYAN" "$RESET" "$label"
+    set +e
+    "$@" > >(tee -a "$LOG_FILE") 2>&1
+    status=$?
+    set -e
+  else
+    start_spinner "$label"
+    set +e
+    "$@" >>"$LOG_FILE" 2>&1
+    status=$?
+    set -e
+    stop_spinner
+  fi
+
+  if [[ $status -eq 0 ]]; then
+    print_success "$label"
+  else
+    print_error "$label"
+  fi
+  return "$status"
 }
 
 validate_ctid() {
@@ -178,35 +293,40 @@ preflight() {
   if [[ ${LITELLM_TESTING:-0} == 1 ]]; then
     effective_uid=${LITELLM_TEST_EUID:-$EUID}
   fi
-  [[ $effective_uid -eq 0 ]] || die "run this installer as root on a Proxmox host"
+  [[ $effective_uid -eq 0 ]] || { echo "Error: run this installer as root on a Proxmox host" >&2; return 1; }
 
   local command
   for command in pct pveam pvesm pvesh ip ping; do
-    command -v "$command" >/dev/null || die "required command not found: $command"
+    command -v "$command" >/dev/null || { echo "Error: required command not found: $command" >&2; return 1; }
   done
 
-  validate_ctid "$CTID" || die "invalid container ID: $CTID"
-  validate_hostname "$HOSTNAME" || die "invalid hostname: $HOSTNAME"
-  [[ -n $IP_ADDRESS ]] || die "static IPv4 address is required"
-  validate_ipv4 "$IP_ADDRESS" || die "invalid IPv4 address: $IP_ADDRESS"
-  validate_cidr "$CIDR" || die "invalid IPv4 CIDR: $CIDR"
-  validate_ipv4 "$GATEWAY" || die "invalid gateway: $GATEWAY"
-  validate_port "$PORT" || die "invalid LiteLLM port: $PORT"
-  NAMESERVERS=$(normalize_nameservers "$NAMESERVER_INPUT") || die "DNS servers must be one or two unique IPv4 addresses separated by commas"
-  [[ $CORES =~ ^[0-9]+$ && $CORES -gt 0 ]] || die "invalid core count: $CORES"
-  [[ $MEMORY =~ ^[0-9]+$ && $MEMORY -gt 0 ]] || die "invalid memory: $MEMORY"
-  [[ $SWAP =~ ^[0-9]+$ ]] || die "invalid swap: $SWAP"
-  [[ $DISK =~ ^[0-9]+$ && $DISK -gt 0 ]] || die "invalid disk size: $DISK"
+  validate_ctid "$CTID" || { echo "Error: invalid container ID: $CTID" >&2; return 1; }
+  validate_hostname "$HOSTNAME" || { echo "Error: invalid hostname: $HOSTNAME" >&2; return 1; }
+  [[ -n $IP_ADDRESS ]] || { echo "Error: static IPv4 address is required" >&2; return 1; }
+  validate_ipv4 "$IP_ADDRESS" || { echo "Error: invalid IPv4 address: $IP_ADDRESS" >&2; return 1; }
+  validate_cidr "$CIDR" || { echo "Error: invalid IPv4 CIDR: $CIDR" >&2; return 1; }
+  validate_ipv4 "$GATEWAY" || { echo "Error: invalid gateway: $GATEWAY" >&2; return 1; }
+  validate_port "$PORT" || { echo "Error: invalid LiteLLM port: $PORT" >&2; return 1; }
+  NAMESERVERS=$(normalize_nameservers "$NAMESERVER_INPUT") || {
+    echo "Error: DNS servers must be one or two unique IPv4 addresses separated by commas" >&2
+    return 1
+  }
+  [[ $CORES =~ ^[0-9]+$ && $CORES -gt 0 ]] || { echo "Error: invalid core count: $CORES" >&2; return 1; }
+  [[ $MEMORY =~ ^[0-9]+$ && $MEMORY -gt 0 ]] || { echo "Error: invalid memory: $MEMORY" >&2; return 1; }
+  [[ $SWAP =~ ^[0-9]+$ ]] || { echo "Error: invalid swap: $SWAP" >&2; return 1; }
+  [[ $DISK =~ ^[0-9]+$ && $DISK -gt 0 ]] || { echo "Error: invalid disk size: $DISK" >&2; return 1; }
 
   if pct status "$CTID" >/dev/null 2>&1; then
-    die "container ID $CTID already exists"
+    echo "Error: container ID $CTID already exists" >&2
+    return 1
   fi
-  ip link show "$BRIDGE" >/dev/null 2>&1 || die "bridge not found: $BRIDGE"
-  storage_supports "$STORAGE" rootdir || die "storage does not support container disks: $STORAGE"
-  storage_supports "$TEMPLATE_STORAGE" vztmpl || die "storage does not support templates: $TEMPLATE_STORAGE"
+  ip link show "$BRIDGE" >/dev/null 2>&1 || { echo "Error: bridge not found: $BRIDGE" >&2; return 1; }
+  storage_supports "$STORAGE" rootdir || { echo "Error: storage does not support container disks: $STORAGE" >&2; return 1; }
+  storage_supports "$TEMPLATE_STORAGE" vztmpl || { echo "Error: storage does not support templates: $TEMPLATE_STORAGE" >&2; return 1; }
 
   if [[ $ALLOW_USED_IP -eq 0 ]] && ping -c 1 -W 1 "$IP_ADDRESS" >/dev/null 2>&1; then
-    die "IPv4 address responds to ping: $IP_ADDRESS (use --allow-used-ip to override)"
+    echo "Error: IPv4 address responds to ping: $IP_ADDRESS (use --allow-used-ip to override)" >&2
+    return 1
   fi
 }
 
@@ -215,11 +335,11 @@ resolve_template() {
     awk '$2 ~ /^debian-13-standard_.*_amd64[.]tar[.]zst$/ {print $2}' |
     sort -V |
     tail -n 1)
-  [[ -n $TEMPLATE ]] || die "no Debian 13 AMD64 standard template is available"
+  [[ -n $TEMPLATE ]] || { echo "Error: no Debian 13 AMD64 standard template is available" >&2; return 1; }
   TEMPLATE_REF="$TEMPLATE_STORAGE:vztmpl/$TEMPLATE"
 
   if ! pveam list "$TEMPLATE_STORAGE" 2>/dev/null | grep -Fq "/$TEMPLATE"; then
-    mutate pveam download "$TEMPLATE_STORAGE" "$TEMPLATE"
+    mutate pveam download "$TEMPLATE_STORAGE" "$TEMPLATE" || return $?
   fi
 }
 
@@ -241,8 +361,11 @@ create_container() {
   if [[ -n $NAMESERVERS ]]; then
     command+=(--nameserver "$NAMESERVERS")
   fi
-  mutate "${command[@]}"
+  mutate "${command[@]}" || return $?
   [[ $DRY_RUN -eq 1 ]] || CT_CREATED=1
+}
+
+start_container() {
   mutate pct start "$CTID"
 }
 
@@ -255,16 +378,21 @@ wait_for_guest() {
     fi
     sleep 2
   done
-  die "container did not become ready"
+  echo "Error: container did not become ready" >&2
+  return 1
 }
 
 main() {
   parse_args "$@"
   collect_settings
-  preflight
-  resolve_template
-  create_container
-  wait_for_guest
+  setup_output
+  printf '\n%bLiteLLM LXC%b\n' "$CYAN" "$RESET"
+  printf '%bContainer %s · %s/%s · %s%b\n\n' "$CYAN" "$CTID" "$IP_ADDRESS" "$CIDR" "$STORAGE" "$RESET"
+  run_step "Validating Proxmox host" preflight || return $?
+  run_step "Preparing Debian 13 template" resolve_template || return $?
+  run_step "Creating container $CTID" create_container || return $?
+  run_step "Starting container $CTID" start_container || return $?
+  run_step "Waiting for container" wait_for_guest || return $?
 }
 
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
