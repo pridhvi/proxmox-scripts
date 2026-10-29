@@ -66,6 +66,38 @@ validate_hostname() {
   [[ $value =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$ ]]
 }
 
+trim_whitespace() {
+  local value=${1:-}
+  value=${value#"${value%%[![:space:]]*}"}
+  value=${value%"${value##*[![:space:]]}"}
+  printf '%s' "$value"
+}
+
+normalize_nameservers() {
+  local value
+  value=$(trim_whitespace "${1:-}")
+  [[ -n $value ]] || return 0
+  [[ $value != ,* && $value != *, && $value != *,,* ]] || return 1
+
+  local IFS=,
+  local -a entries
+  read -r -a entries <<<"$value"
+  [[ ${#entries[@]} -ge 1 && ${#entries[@]} -le 2 ]] || return 1
+
+  local entry
+  local -a normalized=()
+  for entry in "${entries[@]}"; do
+    entry=$(trim_whitespace "$entry")
+    validate_ipv4 "$entry" || return 1
+    normalized+=("$entry")
+  done
+
+  printf '%s' "${normalized[0]}"
+  if [[ ${#normalized[@]} -eq 2 ]]; then
+    printf ' %s' "${normalized[1]}"
+  fi
+}
+
 generate_gateway_token() {
   od -An -N32 -tx1 /dev/urandom | tr -d ' \n'
 }
@@ -116,6 +148,7 @@ collect_settings() {
   IP_ADDRESS=${OPENCLAW_IP:-}
   CIDR=${OPENCLAW_CIDR:-24}
   GATEWAY=${OPENCLAW_GATEWAY:-10.10.10.1}
+  NAMESERVERS_INPUT=${OPENCLAW_NAMESERVERS:-}
   BRIDGE=${OPENCLAW_BRIDGE:-vmbr0}
   STORAGE=${OPENCLAW_STORAGE:-local-zfs}
   TEMPLATE_STORAGE=${OPENCLAW_TEMPLATE_STORAGE:-local}
@@ -131,6 +164,7 @@ collect_settings() {
     fi
     prompt CIDR "IPv4 CIDR" "$CIDR"
     prompt GATEWAY "IPv4 gateway" "$GATEWAY"
+    prompt NAMESERVERS_INPUT "DNS servers (comma-separated, optional)" "$NAMESERVERS_INPUT"
     prompt BRIDGE "Bridge" "$BRIDGE"
     prompt STORAGE "Root-disk storage" "$STORAGE"
     prompt TEMPLATE_STORAGE "Template storage" "$TEMPLATE_STORAGE"
@@ -162,6 +196,7 @@ preflight() {
   validate_ipv4 "$IP_ADDRESS" || die "invalid IPv4 address: $IP_ADDRESS"
   validate_cidr "$CIDR" || die "invalid IPv4 CIDR: $CIDR"
   validate_ipv4 "$GATEWAY" || die "invalid gateway: $GATEWAY"
+  NAMESERVERS=$(normalize_nameservers "$NAMESERVERS_INPUT") || die "invalid DNS servers: $NAMESERVERS_INPUT"
   validate_port "$GATEWAY_PORT" || die "invalid gateway port: $GATEWAY_PORT"
   [[ $CORES =~ ^[0-9]+$ && $CORES -gt 0 ]] || die "invalid core count: $CORES"
   [[ $MEMORY =~ ^[0-9]+$ && $MEMORY -gt 0 ]] || die "invalid memory: $MEMORY"
@@ -195,16 +230,21 @@ resolve_template() {
 
 create_container() {
   local net="name=eth0,bridge=$BRIDGE,ip=$IP_ADDRESS/$CIDR,gw=$GATEWAY"
-  mutate pct create "$CTID" "$TEMPLATE_REF" \
+  local -a create_args=(pct create "$CTID" "$TEMPLATE_REF" \
     --hostname "$HOSTNAME" \
     --cores "$CORES" \
     --memory "$MEMORY" \
     --swap "$SWAP" \
     --rootfs "$STORAGE:$DISK" \
     --net0 "$net" \
+    --features nesting=1 \
     --unprivileged 1 \
     --onboot 1 \
-    --start 0
+    --start 0)
+  if [[ -n $NAMESERVERS ]]; then
+    create_args+=(--nameserver "$NAMESERVERS")
+  fi
+  mutate "${create_args[@]}"
   [[ $DRY_RUN -eq 1 ]] || CT_CREATED=1
   mutate pct start "$CTID"
 }

@@ -23,7 +23,7 @@ setup_stubs() {
   make_stub pvesh 'echo 205'
   make_stub pvesm '
 if [[ "$*" == *"rootdir"* ]]; then
-  printf "Name Type Status Total Used Available %%\nlocal-lvm lvmthin active 1 0 1 0\n"
+  printf "Name Type Status Total Used Available %%\nlocal-zfs zfspool active 1 0 1 0\n"
 elif [[ "$*" == *"vztmpl"* ]]; then
   printf "Name Type Status Total Used Available %%\nlocal dir active 1 0 1 0\n"
 else
@@ -67,8 +67,9 @@ run_command() {
     OPENCLAW_IP="${OPENCLAW_IP-10.10.10.204}" \
     OPENCLAW_CIDR=24 \
     OPENCLAW_GATEWAY=10.10.10.1 \
+    OPENCLAW_NAMESERVERS="${OPENCLAW_NAMESERVERS-10.10.10.2,10.10.10.3}" \
     OPENCLAW_BRIDGE=vmbr0 \
-    OPENCLAW_STORAGE="${OPENCLAW_STORAGE:-local-lvm}" \
+    OPENCLAW_STORAGE="${OPENCLAW_STORAGE:-local-zfs}" \
     OPENCLAW_TEMPLATE_STORAGE="${OPENCLAW_TEMPLATE_STORAGE:-local}" \
     "$@"
 }
@@ -96,11 +97,18 @@ output=$(run_installer)
 [[ $output == *"--cores 8"* ]] || fail "default cores missing"
 [[ $output == *"--memory 16384"* ]] || fail "default memory missing"
 [[ $output == *"--swap 1024"* ]] || fail "default swap missing"
-[[ $output == *"local-lvm:32"* ]] || fail "default disk missing"
+[[ $output == *"local-zfs:32"* ]] || fail "default disk missing"
 [[ $output == *"ip=10.10.10.204/24"* ]] || fail "supplied static address missing"
+[[ $output == *"--nameserver 10.10.10.2\\ 10.10.10.3"* ]] || fail "two DNS servers were not passed to pct create"
 [[ $output == *"--unprivileged 1"* ]] || fail "container must be unprivileged"
-[[ $output != *"nesting"* ]] || fail "nesting must stay disabled"
+[[ $output == *"--features nesting=1"* ]] || fail "container nesting must be enabled"
 [[ ! -s $TMP/mutations ]] || fail "dry-run executed a mutating command"
+
+setup_stubs
+if OPENCLAW_NAMESERVERS=10.10.10.2,invalid run_installer >/dev/null 2>&1; then
+  fail "invalid DNS server was accepted"
+fi
+[[ ! -s $TMP/mutations ]] || fail "invalid DNS input reached mutation"
 
 setup_stubs
 if OPENCLAW_IP=999.10.10.204 run_installer >/dev/null 2>&1; then

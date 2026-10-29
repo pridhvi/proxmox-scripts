@@ -45,6 +45,24 @@ check_ok "accepts a dashed hostname" validate_hostname openclaw-agent
 check_fail "rejects hostname labels starting with a dash" validate_hostname -openclaw
 check_fail "rejects spaces in hostname" validate_hostname "open claw"
 
+check_output() {
+  local name=$1 expected=$2
+  shift 2
+  local actual
+  if ! actual=$("$@" 2>/dev/null); then
+    echo "FAIL: $name"
+    failures=$((failures + 1))
+  elif [[ $actual != "$expected" ]]; then
+    echo "FAIL: $name (expected '$expected', got '$actual')"
+    failures=$((failures + 1))
+  fi
+}
+
+check_output "accepts one DNS server" "10.10.10.2" normalize_nameservers "10.10.10.2"
+check_output "normalizes two comma-separated DNS servers" "10.10.10.2 10.10.10.3" normalize_nameservers " 10.10.10.2, 10.10.10.3 "
+check_fail "rejects a malformed DNS server" normalize_nameservers "10.10.10.2,invalid"
+check_fail "rejects more than two DNS servers" normalize_nameservers "10.10.10.2,10.10.10.3,10.10.10.4"
+
 token=$(generate_gateway_token)
 if [[ ${#token} -lt 43 || "$token" =~ [[:space:]] ]]; then
   echo "FAIL: token must encode at least 32 random bytes without whitespace"
