@@ -81,6 +81,12 @@ run_installer() {
   run_command "$ROOT/install.sh" --non-interactive --dry-run "$@"
 }
 
+run_downloaded_installer() {
+  local script
+  script=$(<"$ROOT/install.sh")
+  run_command bash -c "$script" -- --non-interactive --dry-run "$@"
+}
+
 fail() {
   echo "FAIL: $*" >&2
   exit 1
@@ -104,6 +110,13 @@ output=$(run_installer)
   fail "guest installer was not invoked with the configured port"
 [[ $output != *"LITELLM_MASTER_KEY="* ]] || fail "dry-run output exposed a generated master key"
 [[ ! -s $TMP/mutations ]] || fail "dry-run executed a mutating command"
+
+setup_stubs
+if ! output=$(run_downloaded_installer 2>&1); then
+  fail "download-and-execute invocation failed: $output"
+fi
+[[ $output == *"pct create 205"* ]] || fail "download-and-execute invocation did not run the installer"
+[[ ! -s $TMP/mutations ]] || fail "download-and-execute dry-run executed a mutating command"
 
 setup_stubs
 if LITELLM_IP= run_installer >/dev/null 2>&1; then
