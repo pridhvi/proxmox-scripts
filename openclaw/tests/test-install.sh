@@ -31,7 +31,7 @@ else
 fi'
   make_stub pveam '
 if [[ "${1:-}" == "available" ]]; then
-  printf "system debian-13-standard_13.1-2_amd64.tar.zst\n"
+  printf "system debian-13-standard_13.1-2_amd64.tar.zst\nsystem debian-13-standard_13.1-2_arm64.tar.zst\n"
 elif [[ "${1:-}" == "list" ]]; then
   exit 0
 elif [[ "${1:-}" == "download" ]]; then
@@ -91,6 +91,8 @@ fail() {
 setup_stubs
 output=$(run_installer)
 [[ $output == *"pct create 205"* ]] || fail "dry-run must render pct create"
+[[ $output == *"local:vztmpl/debian-13-standard_13.1-2_amd64.tar.zst"* ]] || fail "amd64 template was not selected"
+[[ $output != *"debian-13-standard_13.1-2_arm64.tar.zst"* ]] || fail "arm64 template was selected"
 [[ $output == *"--cores 8"* ]] || fail "default cores missing"
 [[ $output == *"--memory 16384"* ]] || fail "default memory missing"
 [[ $output == *"--swap 1024"* ]] || fail "default swap missing"

@@ -182,10 +182,10 @@ preflight() {
 
 resolve_template() {
   TEMPLATE=$(pveam available --section system |
-    awk '$2 ~ /^debian-13-standard_/ {print $2}' |
+    awk '$2 ~ /^debian-13-standard_.*_amd64[.]tar[.]zst$/ {print $2}' |
     sort -V |
     tail -n 1)
-  [[ -n $TEMPLATE ]] || die "no Debian 13 standard template is available"
+  [[ -n $TEMPLATE ]] || die "no Debian 13 AMD64 standard template is available"
   TEMPLATE_REF="$TEMPLATE_STORAGE:vztmpl/$TEMPLATE"
 
   if ! pveam list "$TEMPLATE_STORAGE" 2>/dev/null | grep -Fq "/$TEMPLATE"; then

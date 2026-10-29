@@ -6,7 +6,7 @@ Run this on a Proxmox VE host.
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/pridhvi/proxmox-scripts/main/openclaw/install.sh)"
 ```
 
-The self-contained script creates an unprivileged Debian 13 LXC and installs OpenClaw natively.
+The self-contained script creates an unprivileged Debian 13 AMD64 LXC and installs OpenClaw natively.
 
 Defaults:
 
