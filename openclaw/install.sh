@@ -389,9 +389,9 @@ wait_for_guest() {
 
 prepare_payloads() {
   [[ -z $WORK_DIR ]] || return 0
-  WORK_DIR=$(mktemp -d)
+  WORK_DIR=$(mktemp -d) || return $?
 
-  cat >"$WORK_DIR/install-internal.sh" <<'OPENCLAW_GUEST_INSTALLER'
+  cat >"$WORK_DIR/install-internal.sh" <<'OPENCLAW_GUEST_INSTALLER' || return $?
 #!/usr/bin/env bash
 set -Eeuo pipefail
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -557,7 +557,7 @@ rm -f /root/install-openclaw.sh /root/update-openclaw.sh
 echo "OpenClaw installation complete."
 OPENCLAW_GUEST_INSTALLER
 
-  cat >"$WORK_DIR/update.sh" <<'OPENCLAW_UPDATER'
+  cat >"$WORK_DIR/update.sh" <<'OPENCLAW_UPDATER' || return $?
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
@@ -602,7 +602,7 @@ as_openclaw "$OPENCLAW_BIN" browser --json status
 echo "OpenClaw updated successfully."
 OPENCLAW_UPDATER
 
-  chmod 700 "$WORK_DIR/install-internal.sh" "$WORK_DIR/update.sh"
+  chmod 700 "$WORK_DIR/install-internal.sh" "$WORK_DIR/update.sh" || return $?
 }
 
 install_guest() {
@@ -610,13 +610,13 @@ install_guest() {
   if [[ $DRY_RUN -eq 1 ]]; then
     mutate pct push "$CTID" "$WORK_DIR/install-internal.sh" /root/install-openclaw.sh --perms 0755 || return $?
     mutate pct push "$CTID" "$WORK_DIR/update.sh" /root/update-openclaw.sh --perms 0755 || return $?
-    mutate pct exec "$CTID" -- env OPENCLAW_GATEWAY_PORT="$GATEWAY_PORT" OPENCLAW_TOKEN_FILE=/root/openclaw-token bash /root/install-openclaw.sh
-    return
+    mutate pct exec "$CTID" -- env OPENCLAW_GATEWAY_PORT="$GATEWAY_PORT" OPENCLAW_TOKEN_FILE=/root/openclaw-token bash /root/install-openclaw.sh || return $?
+    return 0
   fi
 
-  TEMP_TOKEN=$(mktemp)
-  chmod 600 "$TEMP_TOKEN"
-  generate_gateway_token >"$TEMP_TOKEN"
+  TEMP_TOKEN=$(mktemp) || return $?
+  chmod 600 "$TEMP_TOKEN" || return $?
+  generate_gateway_token >"$TEMP_TOKEN" || return $?
 
   pct push "$CTID" "$WORK_DIR/install-internal.sh" /root/install-openclaw.sh --perms 0755 || return $?
   pct push "$CTID" "$WORK_DIR/update.sh" /root/update-openclaw.sh --perms 0755 || return $?

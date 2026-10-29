@@ -67,4 +67,21 @@ setup_output
 output=$(run_step "Colored success" true)
 [[ $output == *$'\033[32m✓\033[0m'* ]] || fail "forced-TTY success did not render a green check"
 
+reset_output
+WORK_DIR="$TMP/payloads"
+mkdir -p "$WORK_DIR"
+: >"$WORK_DIR/install-internal.sh"
+: >"$WORK_DIR/update.sh"
+TEMP_TOKEN=""
+CTID=205
+GATEWAY_PORT=18789
+export TMPDIR="$TMP"
+: >"$TMP/pct-calls"
+generate_gateway_token() { return 29; }
+pct() { printf '%s\n' "$*" >>"$TMP/pct-calls"; }
+status=0
+run_step "Token failure" install_guest >/dev/null 2>&1 || status=$?
+[[ $status -eq 29 ]] || fail "token generation failure returned $status instead of 29"
+[[ ! -s $TMP/pct-calls ]] || fail "token generation failure still ran pct commands"
+
 echo "PASS: installer output"
