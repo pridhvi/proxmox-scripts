@@ -29,7 +29,7 @@ UPDATER="$WORK_DIR/update.sh"
 [[ -x $UPDATER ]] || fail "updater was not created as an executable"
 bash -n "$GUEST_INSTALLER" "$UPDATER" || fail "embedded scripts have invalid Bash syntax"
 
-assert_file_contains "$GUEST_INSTALLER" "ca-certificates curl jq openssl docker.io docker-compose" \
+assert_file_contains "$GUEST_INSTALLER" "ca-certificates curl jq openssl docker.io docker-cli docker-compose" \
   "guest installer does not install the required packages"
 assert_file_contains "$GUEST_INSTALLER" "systemctl enable --now docker" \
   "guest installer does not enable Docker"

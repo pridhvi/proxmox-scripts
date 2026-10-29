@@ -541,7 +541,7 @@ generate_hex_secret() {
 [[ $PORT =~ ^[0-9]+$ ]] && ((PORT >= 1 && PORT <= 65535)) || die "invalid LiteLLM port"
 
 apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl jq openssl docker.io docker-compose
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl jq openssl docker.io docker-cli docker-compose
 systemctl enable --now docker
 
 install -d -m 0755 /opt/litellm
