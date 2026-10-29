@@ -71,6 +71,7 @@ run_command() {
     OPENCLAW_BRIDGE=vmbr0 \
     OPENCLAW_STORAGE="${OPENCLAW_STORAGE:-local-zfs}" \
     OPENCLAW_TEMPLATE_STORAGE="${OPENCLAW_TEMPLATE_STORAGE:-local}" \
+    OPENCLAW_LOG_FILE="$TMP/install.log" \
     "$@"
 }
 
