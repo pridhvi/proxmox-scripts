@@ -228,6 +228,7 @@ prepare_payloads() {
   cat >"$WORK_DIR/install-internal.sh" <<'OPENCLAW_GUEST_INSTALLER'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 PORT=${OPENCLAW_GATEWAY_PORT:-18789}
 TOKEN_FILE=${OPENCLAW_TOKEN_FILE:-/root/openclaw-token}
@@ -269,7 +270,7 @@ fi
 
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
-  ca-certificates curl gnupg jq xz-utils
+  ca-certificates curl gnupg jq libatomic1 xz-utils
 
 if ! id -u "$OPENCLAW_USER" >/dev/null 2>&1; then
   useradd --create-home --shell /bin/bash --user-group "$OPENCLAW_USER"

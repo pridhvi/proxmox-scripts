@@ -15,6 +15,9 @@ fail() {
   exit 1
 }
 
+grep -Fq 'libatomic1' "$GUEST_INSTALLER" || fail "Node.js runtime dependency libatomic1 is missing"
+grep -Fq 'export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' "$GUEST_INSTALLER" || fail "guest PATH does not include /usr/local/bin"
+
 TOKEN=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 printf '%s\n' "$TOKEN" >"$TMP/token"
 chmod 600 "$TMP/token"
